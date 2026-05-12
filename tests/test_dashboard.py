@@ -53,6 +53,39 @@ def test_index_renders_all_panels_when_data_exists(tmp_path, sample_config):
     assert "<table" in body
     assert "casa_to_trabajo" in body
     assert "depa_to_trabajo" in body
+    assert "chip-row" in body
+    assert "historial de muestreo" in body
+    assert "pasadas" in body
+
+
+def test_filter_chips_mark_active_range(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 25, "Casa", "Trabajo"),
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    body = create_app(cfg_path).test_client().get("/?range=last7").data.decode()
+    # Active chip points to last7, others are plain chips.
+    assert 'href="?range=last7"' in body
+    assert 'chip chip-active' in body
+    # All 7 range options present.
+    for key in ["today", "yesterday", "last7", "last30", "this_month", "last_month", "all"]:
+        assert f'href="?range={key}"' in body
+
+
+def test_invalid_range_falls_back_to_all(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 25, "Casa", "Trabajo"),
+        ("2026-05-11T13:00:00+00:00", "depa_to_trabajo", 18, "Depa", "Trabajo"),
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    resp = create_app(cfg_path).test_client().get("/?range=garbage")
+    assert resp.status_code == 200
+    # Falls back to "all"; the "all" chip is active.
+    body = resp.data.decode()
+    assert 'href="?range=all" >Toda la data</a>' in body.replace("\n", "") or \
+           'class="chip chip-active" href="?range=all"' in body
+    # Charts still render (means filtered df was not empty).
+    assert "casa_to_trabajo" in body
 
 
 def test_comparison_bars_show_grouped_casa_and_depa(tmp_path, sample_config):

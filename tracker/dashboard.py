@@ -1,11 +1,12 @@
 import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import yaml
-from flask import Flask
+from flask import Flask, request
 from plotly.io import to_html
 from plotly.subplots import make_subplots
 
@@ -25,6 +26,42 @@ DECISION_PAIRS = [
 
 DAY_NAMES_SHORT = ["L", "M", "X", "J", "V", "S", "D"]
 
+RANGE_LABELS = [
+    ("today",      "Hoy"),
+    ("yesterday",  "Ayer"),
+    ("last7",      "Últimos 7 días"),
+    ("last30",     "Últimos 30 días"),
+    ("this_month", "Este mes"),
+    ("last_month", "Mes pasado"),
+    ("all",        "Toda la data"),
+]
+RANGE_KEYS = {k for k, _ in RANGE_LABELS}
+
+
+def _filter_df_by_range(df: pd.DataFrame, range_key: str) -> pd.DataFrame:
+    if df.empty or range_key == "all":
+        return df
+    today = datetime.now(LOCAL_TZ).date()
+    if range_key == "today":
+        return df[df["local_date"] == today]
+    if range_key == "yesterday":
+        return df[df["local_date"] == today - timedelta(days=1)]
+    if range_key == "last7":
+        return df[df["local_date"] >= today - timedelta(days=7)]
+    if range_key == "last30":
+        return df[df["local_date"] >= today - timedelta(days=30)]
+    if range_key == "this_month":
+        return df[df["local_date"] >= today.replace(day=1)]
+    if range_key == "last_month":
+        first_this = today.replace(day=1)
+        last_month_end = first_this - timedelta(days=1)
+        last_month_start = last_month_end.replace(day=1)
+        return df[
+            (df["local_date"] >= last_month_start)
+            & (df["local_date"] <= last_month_end)
+        ]
+    return df
+
 
 def create_app(config_path: str) -> Flask:
     app = Flask(__name__)
@@ -36,26 +73,104 @@ def create_app(config_path: str) -> Flask:
     def index():
         with open(cfg_path_abs) as f:
             cfg = yaml.safe_load(f)
-        df = load_samples(cfg["db_path"])
-        if df.empty:
+        df_full = load_samples(cfg["db_path"])
+        if df_full.empty:
             return _empty_page()
 
+        range_key = request.args.get("range", "all")
+        if range_key not in RANGE_KEYS:
+            range_key = "all"
+        df = _filter_df_by_range(df_full, range_key)
+
         sections = [
-            "<h2>Casa vs depa · tiempo medio por dirección</h2>",
-            _render_comparison_bars(df),
-            "<h2>Por hora del día</h2>",
-            _render_hour_overlay(df),
-            "<h2>Por día · mediana y rango (mín–máx)</h2>",
-            _render_daily_range(df),
-            "<h2>Estabilidad · ¿quién varía menos?</h2>",
-            _render_stability_bars(df),
-            "<h2>Detalle por ruta</h2>",
-            _render_abs_heatmaps(df),
-            _render_stats_table(df),
+            _render_filter_chips(range_key),
+            _render_summary_line(df, range_key),
         ]
+        if not df.empty:
+            sections.extend([
+                "<h2>Casa vs depa · tiempo medio por dirección</h2>",
+                _render_comparison_bars(df),
+                "<h2>Por hora del día</h2>",
+                _render_hour_overlay(df),
+                "<h2>Por día · mediana y rango (mín–máx)</h2>",
+                _render_daily_range(df),
+                "<h2>Estabilidad · ¿quién varía menos?</h2>",
+                _render_stability_bars(df),
+                "<h2>Detalle por ruta</h2>",
+                _render_abs_heatmaps(df),
+                _render_stats_table(df),
+            ])
+        sections.extend([
+            "<h2>Historial de muestreo</h2>",
+            _render_history(df_full),
+        ])
         return _page("".join(sections))
 
     return app
+
+
+def _render_filter_chips(active: str) -> str:
+    chips = []
+    for key, label in RANGE_LABELS:
+        cls = "chip chip-active" if key == active else "chip"
+        chips.append(f'<a class="{cls}" href="?range={key}">{label}</a>')
+    return f'<div class="chip-row">{"".join(chips)}</div>'
+
+
+def _render_summary_line(df: pd.DataFrame, range_key: str) -> str:
+    label = dict(RANGE_LABELS).get(range_key, range_key)
+    if df.empty:
+        return (
+            f'<p class="filter-info">Sin muestras en el rango '
+            f'"<b>{label}</b>". Cambia el filtro arriba.</p>'
+        )
+    n = len(df)
+    passes = df["sampled_at"].nunique()
+    days = df["local_date"].nunique()
+    routes = df["route_id"].nunique()
+    return (
+        f'<p class="filter-info">Rango "<b>{label}</b>": '
+        f"{n} muestras · {passes} pasadas · {days} días · {routes} rutas</p>"
+    )
+
+
+def _render_history(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "<p>Sin muestras todavía.</p>"
+    local_dt = df["sampled_at"].dt.tz_convert(LOCAL_TZ)
+    df = df.assign(local_dt=local_dt)
+    by_day = (
+        df.groupby("local_date")
+        .agg(
+            pasadas=("sampled_at", "nunique"),
+            muestras=("id", "count"),
+            primera=("local_dt", "min"),
+            ultima=("local_dt", "max"),
+        )
+        .reset_index()
+        .sort_values("local_date", ascending=False)
+        .head(30)
+    )
+    rows = ""
+    for _, r in by_day.iterrows():
+        primera = r["primera"].strftime("%H:%M")
+        ultima = r["ultima"].strftime("%H:%M")
+        rows += (
+            "<tr>"
+            f"<td>{r['local_date']}</td>"
+            f"<td>{r['pasadas']}</td>"
+            f"<td>{r['muestras']}</td>"
+            f"<td>{primera} – {ultima}</td>"
+            "</tr>"
+        )
+    return (
+        "<table class='stats-table'>"
+        "<thead><tr>"
+        "<th>Fecha</th><th>Pasadas</th><th>Muestras</th><th>Ventana (hora local)</th>"
+        "</tr></thead>"
+        f"<tbody>{rows}</tbody>"
+        "</table>"
+    )
 
 
 # --- Distribution histograms ---------------------------------------------
@@ -435,6 +550,27 @@ def _page(body_html: str) -> str:
  h3 {{ font-size: 14px; margin: 24px 0 8px; color: #555;
        text-transform: uppercase; letter-spacing: 0.04em; }}
  .subtitle {{ color: #666; font-size: 13px; margin-bottom: 24px; }}
+
+ .chip-row {{
+   display: flex; gap: 8px; flex-wrap: wrap;
+   margin: 12px 0 8px;
+ }}
+ .chip {{
+   padding: 6px 14px;
+   border: 1px solid #d0d0d0;
+   border-radius: 999px;
+   text-decoration: none;
+   color: #333;
+   font-size: 13px;
+   background: white;
+   transition: background 0.15s;
+ }}
+ .chip:hover {{ background: #f0f0f0; }}
+ .chip-active {{
+   background: #1f2937; border-color: #1f2937;
+   color: white; font-weight: 600;
+ }}
+ .filter-info {{ color: #555; font-size: 13px; margin: 8px 0 24px; }}
 
  .stats-table {{
    border-collapse: collapse;
