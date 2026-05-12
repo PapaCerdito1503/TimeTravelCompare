@@ -1,0 +1,54 @@
+google_maps_api_key: "YOUR_API_KEY_HERE"
+
+db_path: "data/samples.db"
+
+locations:
+  casa_actual:
+    lat: 20.6335281
+    lng: -103.2568873
+    label: "Casa actual (Parque Las Lomas)"
+  trabajo:
+    lat: 20.6941958
+    lng: -103.3751822
+    label: "Trabajo (WeWork)"
+  iteso:
+    lat: 20.6083796
+    lng: -103.4146601
+    label: "ITESO"
+  depa_nuevo:
+    lat: 20.6134828
+    lng: -103.3249702
+    label: "Depa nuevo (Lomaira)"
+
+routes:
+  - id: casa_to_trabajo
+    origin: casa_actual
+    destination: trabajo
+  - id: depa_to_trabajo
+    origin: depa_nuevo
+    destination: trabajo
+  - id: casa_to_iteso
+    origin: casa_actual
+    destination: iteso
+  - id: depa_to_iteso
+    origin: depa_nuevo
+    destination: iteso
+  - id: trabajo_to_casa
+    origin: trabajo
+    destination: casa_actual
+  - id: trabajo_to_depa
+    origin: trabajo
+    destination: depa_nuevo
+  - id: iteso_to_casa
+    origin: iteso
+    destination: casa_actual
+  - id: iteso_to_depa
+    origin: iteso
+    destination: depa_nuevo
+
+travel_mode: "DRIVE"
+
+# Cost guard: if set, aborts a sampling pass when this many successful
+# API calls have already been made in the current UTC month. Leave
+# commented out to disable.
+# max_monthly_calls: 15000

@@ -1,0 +1,20 @@
+config.yaml
+data/
+*.db
+*.db-journal
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.DS_Store
+*.log
+
+# IDE / tooling
+.claude/
+.pytest_cache/
+.idea/
+.vscode/
+*.egg-info/
+.coverage
+htmlcov/
