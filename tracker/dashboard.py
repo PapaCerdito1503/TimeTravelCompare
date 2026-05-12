@@ -13,6 +13,7 @@ from plotly.subplots import make_subplots
 from tracker.db import init_db
 from tracker.queries import (
     LOCAL_TZ,
+    load_sample_history,
     load_samples,
     median_by_dow_hour,
 )
@@ -102,7 +103,7 @@ def create_app(config_path: str) -> Flask:
             ])
         sections.extend([
             "<h2>Historial de muestreo</h2>",
-            _render_history(df_full),
+            _render_history(cfg["db_path"]),
         ])
         return _page("".join(sections))
 
@@ -134,42 +135,61 @@ def _render_summary_line(df: pd.DataFrame, range_key: str) -> str:
     )
 
 
-def _render_history(df: pd.DataFrame) -> str:
-    if df.empty:
+HISTORY_LIMIT = 200
+
+
+def _render_history(db_path: str) -> str:
+    hist = load_sample_history(db_path, limit=HISTORY_LIMIT)
+    if hist.empty:
         return "<p>Sin muestras todavía.</p>"
-    local_dt = df["sampled_at"].dt.tz_convert(LOCAL_TZ)
-    df = df.assign(local_dt=local_dt)
-    by_day = (
-        df.groupby("local_date")
-        .agg(
-            pasadas=("sampled_at", "nunique"),
-            muestras=("id", "count"),
-            primera=("local_dt", "min"),
-            ultima=("local_dt", "max"),
-        )
-        .reset_index()
-        .sort_values("local_date", ascending=False)
-        .head(30)
-    )
+
+    hist = hist.assign(local_dt=hist["sampled_at"].dt.tz_convert(LOCAL_TZ))
     rows = ""
-    for _, r in by_day.iterrows():
-        primera = r["primera"].strftime("%H:%M")
-        ultima = r["ultima"].strftime("%H:%M")
+    for _, r in hist.iterrows():
+        ts = r["local_dt"].strftime("%Y-%m-%d %H:%M:%S")
+        n_ok = int(r["n_ok"])
+        n_total = int(r["n_total"])
+        n_err = int(r["n_err"])
+
+        if n_err == 0:
+            status_html = "<span class='ok'>OK</span>"
+        elif n_ok > 0:
+            failed = r["err_routes"] or ""
+            status_html = (
+                f"<span class='partial'>Parcial</span>"
+                f"<span class='dim'> · falló: {failed}</span>"
+            )
+        else:
+            failed = r["err_routes"] or ""
+            status_html = (
+                f"<span class='bad'>Falló</span>"
+                f"<span class='dim'> · {failed}</span>"
+            )
+
         rows += (
             "<tr>"
-            f"<td>{r['local_date']}</td>"
-            f"<td>{r['pasadas']}</td>"
-            f"<td>{r['muestras']}</td>"
-            f"<td>{primera} – {ultima}</td>"
+            f"<td>{ts}</td>"
+            f"<td>{n_ok}/{n_total}</td>"
+            f"<td>{status_html}</td>"
             "</tr>"
         )
+
+    note = (
+        f"Mostrando las {len(hist)} pasadas más recientes"
+        + (f" (límite: {HISTORY_LIMIT})." if len(hist) == HISTORY_LIMIT else ".")
+    )
     return (
+        f"<p class='filter-info'>{note} Una fila = una sincronización.</p>"
+        "<div class='history-scroll'>"
         "<table class='stats-table'>"
         "<thead><tr>"
-        "<th>Fecha</th><th>Pasadas</th><th>Muestras</th><th>Ventana (hora local)</th>"
+        "<th>Timestamp local</th>"
+        "<th>Rutas</th>"
+        "<th>Estado</th>"
         "</tr></thead>"
         f"<tbody>{rows}</tbody>"
         "</table>"
+        "</div>"
     )
 
 
@@ -571,6 +591,14 @@ def _page(body_html: str) -> str:
    color: white; font-weight: 600;
  }}
  .filter-info {{ color: #555; font-size: 13px; margin: 8px 0 24px; }}
+
+ .history-scroll {{ max-height: 480px; overflow-y: auto; border: 1px solid #e3e3e3; }}
+ .history-scroll table {{ border: none; }}
+ .history-scroll thead th {{ position: sticky; top: 0; background: #f4f4f4; }}
+ .ok      {{ color: #15803d; font-weight: 600; }}
+ .partial {{ color: #b45309; font-weight: 600; }}
+ .bad     {{ color: #b91c1c; font-weight: 600; }}
+ .dim     {{ color: #888; font-size: 12px; }}
 
  .stats-table {{
    border-collapse: collapse;

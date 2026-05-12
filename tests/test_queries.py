@@ -130,6 +130,65 @@ def test_pair_hourly_savings_empty_when_no_common_hours(db_path):
     assert out.empty
 
 
+def test_load_sample_history_one_row_per_sampled_at(db_path):
+    from tracker.queries import load_sample_history
+    init_db(db_path)
+    with connect(db_path) as conn:
+        # Pasada 1: 2 OK
+        insert_sample(
+            conn, sampled_at="2026-05-11T13:00:00+00:00", route_id="r1",
+            origin_label="A", destination_label="B",
+            duration_sec=600, static_duration_sec=600, distance_m=1000,
+            travel_mode="DRIVE", raw_json="{}",
+        )
+        insert_sample(
+            conn, sampled_at="2026-05-11T13:00:00+00:00", route_id="r2",
+            origin_label="A", destination_label="B",
+            duration_sec=900, static_duration_sec=900, distance_m=1500,
+            travel_mode="DRIVE", raw_json="{}",
+        )
+        # Pasada 2: 1 OK + 1 error
+        insert_sample(
+            conn, sampled_at="2026-05-11T13:30:00+00:00", route_id="r1",
+            origin_label="A", destination_label="B",
+            duration_sec=700, static_duration_sec=700, distance_m=1000,
+            travel_mode="DRIVE", raw_json="{}",
+        )
+        insert_sample(
+            conn, sampled_at="2026-05-11T13:30:00+00:00", route_id="r2",
+            origin_label="A", destination_label="B",
+            duration_sec=0, static_duration_sec=None, distance_m=0,
+            travel_mode="DRIVE", raw_json="{}", error="boom",
+        )
+
+    hist = load_sample_history(db_path)
+    assert len(hist) == 2  # 2 unique sampled_at
+    # Most recent first
+    assert hist.iloc[0]["sampled_at"].strftime("%H:%M") == "13:30"
+    assert hist.iloc[0]["n_total"] == 2
+    assert hist.iloc[0]["n_ok"] == 1
+    assert hist.iloc[0]["n_err"] == 1
+    assert hist.iloc[0]["err_routes"] == "r2"
+    # First pasada: all ok
+    assert hist.iloc[1]["n_ok"] == 2
+    assert hist.iloc[1]["n_err"] == 0
+
+
+def test_load_sample_history_respects_limit(db_path):
+    from tracker.queries import load_sample_history
+    init_db(db_path)
+    with connect(db_path) as conn:
+        for i in range(10):
+            insert_sample(
+                conn, sampled_at=f"2026-05-11T13:{i:02d}:00+00:00", route_id="r1",
+                origin_label="A", destination_label="B",
+                duration_sec=600, static_duration_sec=600, distance_m=1000,
+                travel_mode="DRIVE", raw_json="{}",
+            )
+    assert len(load_sample_history(db_path, limit=3)) == 3
+    assert len(load_sample_history(db_path, limit=999)) == 10
+
+
 def test_pair_dow_hour_savings_pivot_shape(db_path):
     from tracker.queries import pair_dow_hour_savings
     _seed(db_path, [

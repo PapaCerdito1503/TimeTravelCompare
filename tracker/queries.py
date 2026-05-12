@@ -101,6 +101,34 @@ def pair_hourly_savings(
     return out.sort_values("local_hour").reset_index(drop=True)
 
 
+def load_sample_history(db_path: str, limit: int = 200) -> pd.DataFrame:
+    """
+    Per-sync-pass activity, most recent first, capped at `limit` rows.
+    Columns: sampled_at, n_total, n_ok, n_err, ok_routes, err_routes.
+    """
+    with connect(db_path) as conn:
+        df = pd.read_sql_query(
+            """
+            SELECT sampled_at,
+                   COUNT(*) AS n_total,
+                   SUM(CASE WHEN error IS NULL THEN 1 ELSE 0 END) AS n_ok,
+                   SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS n_err,
+                   GROUP_CONCAT(CASE WHEN error IS NULL THEN route_id END) AS ok_routes,
+                   GROUP_CONCAT(CASE WHEN error IS NOT NULL THEN route_id END) AS err_routes
+            FROM samples
+            GROUP BY sampled_at
+            ORDER BY sampled_at DESC
+            LIMIT ?
+            """,
+            conn,
+            params=(limit,),
+        )
+    if df.empty:
+        return df
+    df["sampled_at"] = pd.to_datetime(df["sampled_at"], utc=True)
+    return df
+
+
 def pair_dow_hour_savings(
     df: pd.DataFrame, casa_id: str, depa_id: str
 ) -> pd.DataFrame:

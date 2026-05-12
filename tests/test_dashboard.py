@@ -55,7 +55,26 @@ def test_index_renders_all_panels_when_data_exists(tmp_path, sample_config):
     assert "depa_to_trabajo" in body
     assert "chip-row" in body
     assert "historial de muestreo" in body
-    assert "pasadas" in body
+    assert "una fila = una sincronizaci" in body
+
+
+def test_history_shows_one_row_per_sampled_at(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 25, "Casa", "Trabajo"),
+        ("2026-05-11T13:00:00+00:00", "depa_to_trabajo", 18, "Depa", "Trabajo"),
+        ("2026-05-11T13:30:00+00:00", "casa_to_trabajo", 27, "Casa", "Trabajo"),
+        ("2026-05-11T13:30:00+00:00", "depa_to_trabajo", 19, "Depa", "Trabajo"),
+        ("2026-05-11T14:00:00+00:00", "casa_to_trabajo", 30, "Casa", "Trabajo"),
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    body = create_app(cfg_path).test_client().get("/").data.decode()
+    # 3 unique sampled_at values → 3 history rows containing those exact local times
+    assert "07:00:00" in body  # 13:00 UTC = 07:00 MX local
+    assert "07:30:00" in body
+    assert "08:00:00" in body
+    # Per-row N rutas column shows X/Y
+    assert "2/2" in body
+    assert "1/1" in body
 
 
 def test_filter_chips_mark_active_range(tmp_path, sample_config):
