@@ -83,12 +83,10 @@ def test_filter_chips_mark_active_range(tmp_path, sample_config):
     ])
     cfg_path = _write_config(tmp_path, sample_config)
     body = create_app(cfg_path).test_client().get("/?range=last7").data.decode()
-    # Active chip points to last7, others are plain chips.
     assert 'href="?range=last7"' in body
     assert 'chip chip-active' in body
-    # All 7 range options present.
     for key in ["today", "yesterday", "last7", "last30", "this_month", "last_month", "all"]:
-        assert f'href="?range={key}"' in body
+        assert f'href="?range={key}' in body
 
 
 def test_invalid_range_falls_back_to_all(tmp_path, sample_config):
@@ -99,12 +97,70 @@ def test_invalid_range_falls_back_to_all(tmp_path, sample_config):
     cfg_path = _write_config(tmp_path, sample_config)
     resp = create_app(cfg_path).test_client().get("/?range=garbage")
     assert resp.status_code == 200
-    # Falls back to "all"; the "all" chip is active.
     body = resp.data.decode()
-    assert 'href="?range=all" >Toda la data</a>' in body.replace("\n", "") or \
-           'class="chip chip-active" href="?range=all"' in body
-    # Charts still render (means filtered df was not empty).
+    assert 'class="chip chip-active" href="?range=all"' in body
     assert "casa_to_trabajo" in body
+
+
+def test_custom_from_to_filters_dates(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-10T13:00:00+00:00", "casa_to_trabajo", 25, "Casa", "Trabajo"),
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 30, "Casa", "Trabajo"),
+        ("2026-05-12T13:00:00+00:00", "casa_to_trabajo", 28, "Casa", "Trabajo"),
+        ("2026-05-13T13:00:00+00:00", "casa_to_trabajo", 27, "Casa", "Trabajo"),
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    body = create_app(cfg_path).test_client().get(
+        "/?from=2026-05-11&to=2026-05-12"
+    ).data.decode()
+    assert "fechas <b>2026-05-11</b> a <b>2026-05-12</b>" in body
+    # 2 days × 1 route = 2 muestras kept
+    assert "2 muestras" in body
+
+
+def test_hour_filter_narrows_data(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-11T12:00:00+00:00", "casa_to_trabajo", 25, "Casa", "Trabajo"),  # 06:00 local
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 30, "Casa", "Trabajo"),  # 07:00
+        ("2026-05-11T15:00:00+00:00", "casa_to_trabajo", 28, "Casa", "Trabajo"),  # 09:00
+        ("2026-05-11T20:00:00+00:00", "casa_to_trabajo", 35, "Casa", "Trabajo"),  # 14:00
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    body = create_app(cfg_path).test_client().get(
+        "/?hour_from=6&hour_to=9"
+    ).data.decode()
+    # hours 6,7,9 → 3 muestras kept; 14:00 dropped
+    assert "hora <b>6:00–9:59</b>" in body
+    assert "3 muestras" in body
+
+
+def test_chip_link_preserves_hour_filter(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 25, "Casa", "Trabajo"),
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    body = create_app(cfg_path).test_client().get(
+        "/?range=last7&hour_from=6&hour_to=10"
+    ).data.decode()
+    # Each chip URL includes the current hour filter
+    assert "?range=today&amp;hour_from=6&amp;hour_to=10" in body or \
+           "?range=today&hour_from=6&hour_to=10" in body
+    assert "?range=all&amp;hour_from=6&amp;hour_to=10" in body or \
+           "?range=all&hour_from=6&hour_to=10" in body
+
+
+def test_form_inputs_show_current_filter_values(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 25, "Casa", "Trabajo"),
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    body = create_app(cfg_path).test_client().get(
+        "/?from=2026-05-10&to=2026-05-12&hour_from=7&hour_to=9"
+    ).data.decode()
+    assert 'name="from" value="2026-05-10"' in body
+    assert 'name="to" value="2026-05-12"' in body
+    assert 'name="hour_from" value="7"' in body
+    assert 'name="hour_to" value="9"' in body
 
 
 def test_comparison_bars_show_grouped_casa_and_depa(tmp_path, sample_config):

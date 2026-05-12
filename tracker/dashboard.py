@@ -64,6 +64,55 @@ def _filter_df_by_range(df: pd.DataFrame, range_key: str) -> pd.DataFrame:
     return df
 
 
+def _parse_date(s):
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_hour(s):
+    if s is None or s == "":
+        return None
+    try:
+        v = int(s)
+    except (ValueError, TypeError):
+        return None
+    return v if 0 <= v <= 23 else None
+
+
+def _parse_filter_state(args):
+    range_key = args.get("range", "all")
+    if range_key not in RANGE_KEYS:
+        range_key = "all"
+    return {
+        "range_key": range_key,
+        "from_date": _parse_date(args.get("from")),
+        "to_date": _parse_date(args.get("to")),
+        "hour_from": _parse_hour(args.get("hour_from")),
+        "hour_to": _parse_hour(args.get("hour_to")),
+    }
+
+
+def _apply_filters(df: pd.DataFrame, state: dict) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if state["from_date"] is not None or state["to_date"] is not None:
+        if state["from_date"]:
+            df = df[df["local_date"] >= state["from_date"]]
+        if state["to_date"]:
+            df = df[df["local_date"] <= state["to_date"]]
+    elif state["range_key"] != "all":
+        df = _filter_df_by_range(df, state["range_key"])
+    if state["hour_from"] is not None:
+        df = df[df["local_hour"] >= state["hour_from"]]
+    if state["hour_to"] is not None:
+        df = df[df["local_hour"] <= state["hour_to"]]
+    return df
+
+
 def create_app(config_path: str) -> Flask:
     app = Flask(__name__)
     cfg_path_abs = str(Path(config_path).resolve())
@@ -78,14 +127,12 @@ def create_app(config_path: str) -> Flask:
         if df_full.empty:
             return _empty_page()
 
-        range_key = request.args.get("range", "all")
-        if range_key not in RANGE_KEYS:
-            range_key = "all"
-        df = _filter_df_by_range(df_full, range_key)
+        state = _parse_filter_state(request.args)
+        df = _apply_filters(df_full, state)
 
         sections = [
-            _render_filter_chips(range_key),
-            _render_summary_line(df, range_key),
+            _render_filter_form(state),
+            _render_summary_line(df, state),
         ]
         if not df.empty:
             sections.extend([
@@ -110,27 +157,77 @@ def create_app(config_path: str) -> Flask:
     return app
 
 
-def _render_filter_chips(active: str) -> str:
+def _build_chip_url(chip_key: str, state: dict) -> str:
+    """Chip URL preserves hour filter but resets custom from/to."""
+    parts = [f"range={chip_key}"]
+    if state["hour_from"] is not None:
+        parts.append(f"hour_from={state['hour_from']}")
+    if state["hour_to"] is not None:
+        parts.append(f"hour_to={state['hour_to']}")
+    return "?" + "&".join(parts)
+
+
+def _render_filter_form(state: dict) -> str:
+    using_custom = state["from_date"] is not None or state["to_date"] is not None
+    active_chip = None if using_custom else state["range_key"]
+
     chips = []
     for key, label in RANGE_LABELS:
-        cls = "chip chip-active" if key == active else "chip"
-        chips.append(f'<a class="{cls}" href="?range={key}">{label}</a>')
-    return f'<div class="chip-row">{"".join(chips)}</div>'
+        cls = "chip chip-active" if key == active_chip else "chip"
+        chips.append(f'<a class="{cls}" href="{_build_chip_url(key, state)}">{label}</a>')
+    chips_html = f'<div class="chip-row">{"".join(chips)}</div>'
+
+    from_v = state["from_date"].isoformat() if state["from_date"] else ""
+    to_v = state["to_date"].isoformat() if state["to_date"] else ""
+    hf_v = state["hour_from"] if state["hour_from"] is not None else ""
+    ht_v = state["hour_to"] if state["hour_to"] is not None else ""
+
+    form_html = (
+        '<form method="get" class="filter-form">'
+        # Preserve chip range when user only changes hour without using custom dates
+        f'<input type="hidden" name="range" value="{state["range_key"]}">'
+        '<label>Desde'
+        f'<input type="date" name="from" value="{from_v}"></label>'
+        '<label>Hasta'
+        f'<input type="date" name="to" value="{to_v}"></label>'
+        '<label>Hora desde'
+        f'<input type="number" min="0" max="23" name="hour_from" value="{hf_v}" placeholder="0-23"></label>'
+        '<label>Hora hasta'
+        f'<input type="number" min="0" max="23" name="hour_to" value="{ht_v}" placeholder="0-23"></label>'
+        '<button type="submit">Aplicar</button>'
+        '<a href="/" class="reset-link">Reset</a>'
+        '</form>'
+    )
+
+    return chips_html + form_html
 
 
-def _render_summary_line(df: pd.DataFrame, range_key: str) -> str:
-    label = dict(RANGE_LABELS).get(range_key, range_key)
+def _render_summary_line(df: pd.DataFrame, state: dict) -> str:
+    parts = []
+    if state["from_date"] or state["to_date"]:
+        from_s = state["from_date"].isoformat() if state["from_date"] else "···"
+        to_s = state["to_date"].isoformat() if state["to_date"] else "···"
+        parts.append(f"fechas <b>{from_s}</b> a <b>{to_s}</b>")
+    else:
+        label = dict(RANGE_LABELS).get(state["range_key"], state["range_key"])
+        parts.append(f'rango <b>{label}</b>')
+    if state["hour_from"] is not None or state["hour_to"] is not None:
+        h_from = state["hour_from"] if state["hour_from"] is not None else "0"
+        h_to = state["hour_to"] if state["hour_to"] is not None else "23"
+        parts.append(f"hora <b>{h_from}:00–{h_to}:59</b>")
+    filter_desc = " · ".join(parts)
+
     if df.empty:
         return (
-            f'<p class="filter-info">Sin muestras en el rango '
-            f'"<b>{label}</b>". Cambia el filtro arriba.</p>'
+            f'<p class="filter-info">Sin muestras con filtro {filter_desc}. '
+            "Cambia arriba.</p>"
         )
     n = len(df)
     passes = df["sampled_at"].nunique()
     days = df["local_date"].nunique()
     routes = df["route_id"].nunique()
     return (
-        f'<p class="filter-info">Rango "<b>{label}</b>": '
+        f'<p class="filter-info">{filter_desc} → '
         f"{n} muestras · {passes} pasadas · {days} días · {routes} rutas</p>"
     )
 
@@ -332,10 +429,7 @@ def _render_hour_overlay(df: pd.DataFrame) -> str:
                     ),
                     row=r, col=c,
                 )
-        fig.update_xaxes(
-            title_text="Hora local", row=r, col=c,
-            dtick=2, range=[5.5, 23.5],
-        )
+        fig.update_xaxes(title_text="Hora local", row=r, col=c, dtick=2)
 
     fig.update_yaxes(title_text="Minutos", row=1, col=1)
     fig.update_yaxes(title_text="Minutos", row=2, col=1)
@@ -493,6 +587,10 @@ def _render_abs_heatmaps(df: pd.DataFrame) -> str:
     z_min = float(df["duration_min"].min())
     z_max = float(df["duration_min"].max())
 
+    hr_min = int(df["local_hour"].min())
+    hr_max = int(df["local_hour"].max())
+    hour_index = range(hr_min, hr_max + 1)
+
     fig = make_subplots(
         rows=rows, cols=cols,
         subplot_titles=route_ids,
@@ -503,7 +601,7 @@ def _render_abs_heatmaps(df: pd.DataFrame) -> str:
         sub = median_by_dow_hour(df, route_id=rid)
         pivot = (
             sub.pivot(index="local_hour", columns="local_dow", values="median_min")
-            .reindex(index=range(24), columns=range(7))
+            .reindex(index=hour_index, columns=range(7))
         )
         fig.add_trace(
             go.Heatmap(
@@ -591,6 +689,33 @@ def _page(body_html: str) -> str:
    color: white; font-weight: 600;
  }}
  .filter-info {{ color: #555; font-size: 13px; margin: 8px 0 24px; }}
+
+ .filter-form {{
+   display: flex; flex-wrap: wrap; gap: 12px;
+   align-items: flex-end; margin: 8px 0 24px;
+   padding: 10px 12px; border: 1px solid #e3e3e3; border-radius: 6px;
+   background: #f9fafb;
+ }}
+ .filter-form label {{
+   display: inline-flex; flex-direction: column; gap: 2px;
+   font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 0.04em;
+ }}
+ .filter-form input {{
+   font-size: 13px; padding: 5px 8px;
+   border: 1px solid #d0d0d0; border-radius: 4px; background: white;
+   font-variant-numeric: tabular-nums;
+ }}
+ .filter-form input[type="number"] {{ width: 80px; }}
+ .filter-form button {{
+   padding: 7px 14px; border: none; border-radius: 999px;
+   background: #1f2937; color: white; font-size: 13px; font-weight: 600;
+   cursor: pointer;
+ }}
+ .filter-form button:hover {{ background: #374151; }}
+ .reset-link {{
+   font-size: 12px; color: #777; text-decoration: none; align-self: center;
+ }}
+ .reset-link:hover {{ text-decoration: underline; }}
 
  .history-scroll {{ max-height: 480px; overflow-y: auto; border: 1px solid #e3e3e3; }}
  .history-scroll table {{ border: none; }}
