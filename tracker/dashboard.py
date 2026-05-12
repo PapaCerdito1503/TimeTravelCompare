@@ -138,6 +138,8 @@ def create_app(config_path: str) -> Flask:
             sections.extend([
                 "<h2>Casa vs depa · tiempo medio por dirección</h2>",
                 _render_comparison_bars(df),
+                "<h2>Delta · minutos ahorrados con depa por hora</h2>",
+                _render_delta_lines(df),
                 "<h2>Por hora del día</h2>",
                 _render_hour_overlay(df),
                 "<h2>Por día · mediana y rango (mín–máx)</h2>",
@@ -376,6 +378,64 @@ def _render_comparison_bars(df: pd.DataFrame) -> str:
 
 
 # --- Detail section ------------------------------------------------------
+
+def _render_delta_lines(df: pd.DataFrame) -> str:
+    """Median delta (casa - depa) per direction pair, by hour of day."""
+    if df.empty:
+        return ""
+
+    hourly = (
+        df.groupby(["route_id", "local_hour"])["duration_min"]
+        .median()
+        .reset_index()
+    )
+
+    pair_colors = ["#2563eb", "#1e3a8a", "#ea580c", "#7c2d12"]
+    fig = go.Figure()
+    rendered_any = False
+
+    for (label, casa_id, depa_id), color in zip(DECISION_PAIRS, pair_colors):
+        casa = hourly[hourly["route_id"] == casa_id].set_index("local_hour")["duration_min"]
+        depa = hourly[hourly["route_id"] == depa_id].set_index("local_hour")["duration_min"]
+        common = casa.index.intersection(depa.index)
+        if len(common) == 0:
+            continue
+        delta = (casa.loc[common] - depa.loc[common]).sort_index()
+        fig.add_trace(go.Scatter(
+            x=list(delta.index),
+            y=list(delta.values),
+            mode="lines+markers",
+            name=label,
+            line=dict(color=color, width=2),
+            marker=dict(size=6),
+            hovertemplate=(
+                f"<b>{label}</b><br>"
+                "hora=%{x}:00<br>"
+                "ahorro=%{y:+.1f} min<extra></extra>"
+            ),
+        ))
+        rendered_any = True
+
+    if not rendered_any:
+        return "<p class='filter-info'>Sin horas en común entre casa y depa todavía.</p>"
+
+    fig.add_hline(y=0, line=dict(color="#333", width=1, dash="dash"))
+
+    fig.update_layout(
+        title=(
+            "<b>Delta por hora del día</b>  "
+            "<span style='color:#666;font-size:13px;font-weight:400'>"
+            "positivo = depa más rápido · cero = empate · negativo = casa más rápido</span>"
+        ),
+        xaxis=dict(title="Hora local", dtick=2, gridcolor="#eee"),
+        yaxis=dict(title="Min ahorrados (casa − depa)", gridcolor="#eee", zeroline=False),
+        height=480,
+        margin=dict(t=80, b=80),
+        legend=dict(orientation="h", y=-0.18, x=0.5, xanchor="center"),
+        plot_bgcolor="white",
+    )
+    return to_html(fig, include_plotlyjs=False, full_html=False)
+
 
 def _render_hour_overlay(df: pd.DataFrame) -> str:
     if df.empty:

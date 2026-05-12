@@ -163,6 +163,21 @@ def test_form_inputs_show_current_filter_values(tmp_path, sample_config):
     assert 'name="hour_to" value="9"' in body
 
 
+def test_delta_lines_chart_renders(tmp_path, sample_config):
+    _seed(sample_config["db_path"], [
+        ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 30, "Casa", "Trabajo"),
+        ("2026-05-11T13:00:00+00:00", "depa_to_trabajo", 20, "Depa", "Trabajo"),
+        ("2026-05-11T14:00:00+00:00", "casa_to_trabajo", 32, "Casa", "Trabajo"),
+        ("2026-05-11T14:00:00+00:00", "depa_to_trabajo", 18, "Depa", "Trabajo"),
+    ])
+    cfg_path = _write_config(tmp_path, sample_config)
+    body = create_app(cfg_path).test_client().get("/").data.decode()
+    assert "Delta por hora del d" in body
+    assert "Min ahorrados (casa" in body
+    # Trace name matches direction label
+    assert '"name":"\\u2192 Trabajo (ida)"' in body
+
+
 def test_comparison_bars_show_grouped_casa_and_depa(tmp_path, sample_config):
     _seed(sample_config["db_path"], [
         ("2026-05-11T13:00:00+00:00", "casa_to_trabajo", 30, "Casa", "Trabajo"),
