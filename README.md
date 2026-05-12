@@ -1,6 +1,6 @@
 # time-travel-tracker
 
-Sondea Google Routes API cada 20 min (06:00–23:00 hora local) y guarda duraciones reales con tráfico para comparar commutes a lo largo del tiempo.
+Sondea Google Routes API cada 15 min (06:00–23:00 hora local) y guarda duraciones reales con tráfico para comparar commutes a lo largo del tiempo.
 
 Caso de uso: ¿me conviene mudarme? Compara `casa actual → trabajo` vs `depa nuevo → trabajo` con datos reales recolectados 2-4 semanas.
 
@@ -61,7 +61,7 @@ Logs en `data/launchd.out.log`, `data/launchd.err.log` y `data/sample.log`.
 ## Costo
 
 Google Maps Platform: $200 USD/mes de crédito gratis.
-Este setup (20 min, 8 rutas): 52 pasadas × 8 × 30 = ~12,480 calls/mes × $10/1k = **~$125 USD/mes → cubierto**.
+Este setup (15 min, 8 rutas): 69 pasadas × 8 × 30 = ~16,560 calls/mes × $10/1k = **~$166 USD/mes → cubierto**.
 
 Para activar un guard duro, en `config.yaml`:
 ```yaml
